@@ -9,3 +9,5 @@ docs/
 .venv/
 __pycache__/
 docs/
+
+credentials/
