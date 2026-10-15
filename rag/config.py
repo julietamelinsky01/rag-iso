@@ -9,5 +9,5 @@ SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
 OLLAMA_URL = "http://127.0.0.1:11434"
 EMBEDDING_MODEL = "embeddinggemma:latest"
 EMBEDDING_DIM = 768
-CHAT_MODEL = "qwen3:4b"
+CHAT_MODEL = "qwen3:4b-instruct-2507-q4_K_M"
 TOP_K = 6
