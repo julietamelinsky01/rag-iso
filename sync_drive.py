@@ -9,12 +9,23 @@ si hay que regenerar embeddings. Cada documento se prepara por separado:
 si uno falla, conserva su versión anterior y los demás siguen.
 Los archivos retirados de la carpeta se desactivan, sin borrarse.
 
+Tipo de documento (norma o documento interno):
+- Si la descripción del archivo en Drive tiene una línea
+  "norma: ISO 9001:2015", se usa ese valor; "norma: interno" lo marca
+  como documento interno.
+- Si no, se reconoce por el nombre: NOM_ISO_9001-2015.pdf → ISO 9001:2015.
+- Si tampoco, es un documento interno.
+
 Procesa PDF, DOCX, TXT y MD ubicados directamente en la carpeta.
-Requiere supabase/005_sync_integrada.sql.
+Si cambia la versión del lector (PIPELINE_VERSION en ingest.py), los
+archivos procesados con otra versión se vuelven a procesar.
+
+Requiere supabase/005_sync_integrada.sql y 006_estructura_documental.sql.
 """
 import argparse
 import hashlib
 import os
+import re
 import tempfile
 from pathlib import Path
 
@@ -26,10 +37,10 @@ from googleapiclient.http import MediaIoBaseDownload
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 
-from ingest import EXTS, prepare_file
+from ingest import EXTS, PIPELINE_VERSION, prepare_file
 from rag.clients import supabase
 
-FIELDS = "id,name,mimeType,modifiedTime,version,md5Checksum"
+FIELDS = "id,name,mimeType,modifiedTime,version,md5Checksum,description"
 STAGE_BATCH = 100  # fragmentos por petición (~1 MB)
 
 
@@ -86,7 +97,43 @@ def signature(file: dict) -> tuple:
         file.get("modifiedTime"),
         file.get("version"),
         file.get("md5Checksum"),
+        file.get("description"),
     )
+
+
+# El nombre debe EMPEZAR con el código de la norma, con prefijos de
+# organismos opcionales en mayúsculas (NOM, NTC, UNE, EN, IRAM...):
+#   "ISO 9001", "NOM_ISO_9001-2015", "ISO-IEC_27001_2022", "UNE-EN ISO 14001"
+# Así "Procedimiento auditorías ISO 9001" sigue siendo documento interno.
+ISO_NAME_RE = re.compile(
+    r"^(?:[A-Z]{2,5}[\s_-]+)*(?i:ISO)(?:[\s_/-]*((?i:IEC)))?[\s_-]*(\d{4,5})"
+    r"(?:[\s_:.-]+((?:19|20)\d{2}))?(?!\d)"
+)
+NORMA_LINE_RE = re.compile(r"^\s*norma\s*:\s*(.*?)\s*$", re.IGNORECASE | re.MULTILINE)
+INTERNAL_VALUES = {"", "interno", "interna", "documento interno", "ninguna", "no"}
+
+
+def detect_norma(file: dict) -> str | None:
+    """Norma del documento, o None si es un documento interno.
+
+    La descripción del archivo en Drive tiene prioridad sobre el nombre,
+    para poder corregir a mano cualquier caso.
+    """
+    match = NORMA_LINE_RE.search(file.get("description") or "")
+    if match:
+        value = match.group(1)
+        return None if value.lower() in INTERNAL_VALUES else value
+
+    match = ISO_NAME_RE.match(Path(file["name"]).stem)
+    if not match:
+        return None
+    iec, number, year = match.groups()
+    norma = f"ISO/IEC {number}" if iec else f"ISO {number}"
+    return f"{norma}:{year}" if year else norma
+
+
+def describe(norma: str | None) -> str:
+    return f"norma {norma}" if norma else "documento interno"
 
 
 def download(drive, file: dict, path: Path) -> None:
@@ -127,12 +174,15 @@ def classify(file: dict, previous: dict | None) -> str:
         or previous["content_md5"] != file["md5Checksum"]
     ):
         return "contenido"
+    if previous.get("pipeline_version") != PIPELINE_VERSION:
+        return "reprocesar"
     if not previous.get("active", True):
         return "reactivar"
     if (
         previous["file_name"] != file["name"]
         or previous["modified_time"] != file["modifiedTime"]
         or previous.get("drive_version") != file.get("version")
+        or previous.get("norma") != detect_norma(file)
     ):
         return "metadatos"
     return "sin cambios"
@@ -171,6 +221,8 @@ def decide(
                     "md5": file["md5Checksum"],
                     "modifiedTime": file["modifiedTime"],
                     "version": file.get("version"),
+                    "norma": detect_norma(file),
+                    "pipeline": PIPELINE_VERSION,
                 }
             )
 
@@ -199,30 +251,33 @@ def load_state(db, folder_id: str) -> dict[str, dict]:
         offset += 500
 
     ids = [row["document_id"] for row in rows]
-    active = {}
+    docs = {}
     for start in range(0, len(ids), 200):
         for doc in (
             db.table("documents")
-            .select("id,active")
+            .select("id,active,norma")
             .in_("id", ids[start:start + 200])
             .execute()
             .data
         ):
-            active[doc["id"]] = doc["active"]
+            docs[doc["id"]] = doc
 
     for row in rows:
-        row["active"] = active.get(row["document_id"], True)
+        doc = docs.get(row["document_id"], {})
+        row["active"] = doc.get("active", True)
+        row["norma"] = doc.get("norma")
     return {row["file_id"]: row for row in rows}
 
 
 def staged_complete(db, folder_id: str, file: dict) -> bool:
-    """True si el contenido de esta versión ya quedó preparado antes."""
+    """True si esta versión del archivo ya quedó preparada con este lector."""
     docs = (
         db.table("drive_staged_documents")
         .select("chunk_total")
         .eq("folder_id", folder_id)
         .eq("file_id", file["id"])
         .eq("content_md5", file["md5Checksum"])
+        .eq("pipeline_version", PIPELINE_VERSION)
         .execute()
         .data
     )
@@ -240,7 +295,9 @@ def staged_complete(db, folder_id: str, file: dict) -> bool:
     return chunks.count == docs[0]["chunk_total"]
 
 
-def stage(db, folder_id: str, file: dict, rows: list[dict]) -> None:
+def stage(
+    db, folder_id: str, file: dict, doc_meta: dict, rows: list[dict]
+) -> None:
     """Sube los fragmentos de un documento por lotes."""
     for start in range(0, len(rows), STAGE_BATCH):
         batch = [
@@ -253,6 +310,8 @@ def stage(db, folder_id: str, file: dict, rows: list[dict]) -> None:
                 "p_folder_id": folder_id,
                 "p_file_id": file["id"],
                 "p_md5": file["md5Checksum"],
+                "p_pipeline_version": PIPELINE_VERSION,
+                "p_doc_meta": doc_meta,
                 "p_total": len(rows),
                 "p_chunks": batch,
             },
@@ -309,7 +368,11 @@ def main() -> int:
     plan = {}
     for file in sorted(first.values(), key=lambda f: f["name"].lower()):
         plan[file["id"]] = classify(file, previous.get(file["id"]))
-        print(f"  {plan[file['id']]}: {file['name']}", flush=True)
+        print(
+            f"  {plan[file['id']]}: {file['name']} "
+            f"({describe(detect_norma(file))})",
+            flush=True,
+        )
 
     removed = [
         row for file_id, row in previous.items()
@@ -333,7 +396,7 @@ def main() -> int:
             if action == "sin huella":
                 failed[file_id] = "Drive no informó la huella MD5."
                 continue
-            if action != "contenido":
+            if action not in ("contenido", "reprocesar"):
                 continue
 
             try:
@@ -346,8 +409,8 @@ def main() -> int:
                 path = Path(work) / f"{file_id}{Path(name).suffix.lower()}"
                 print(f"⬇ Descargando: {name}", flush=True)
                 download(drive, file, path)
-                rows = prepare_file(path, label=name)
-                stage(db, folder_id, file, rows)
+                doc_meta, rows = prepare_file(path, label=name)
+                stage(db, folder_id, file, doc_meta, rows)
                 prepared += 1
             except Exception as error:
                 failed[file_id] = str(error) or type(error).__name__

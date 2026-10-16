@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from rag.answer import NOT_FOUND, WARNING, build_answer  # noqa: E402
+from rag.answer import NOT_FOUND, WARNING, _format_context, build_answer  # noqa: E402
 
 CHUNKS = [
     {"document_id": 3, "source": "Manual_Prueba_RAG.pdf", "clausula": "3.3",
@@ -19,9 +19,63 @@ CHUNKS = [
      "titulo": "Conservación", "pagina": 1, "score": 0.02},
     {"document_id": 7, "source": "Procedimiento.docx", "clausula": None,
      "titulo": None, "pagina": 1, "score": 0.01},
+    {"document_id": 11, "source": "NOM_ISO_9001-2015.pdf", "norma": "ISO 9001:2015",
+     "clausula": "9.2.2", "titulo": "La organización debe:", "pagina": 30, "score": 0.02},
+    {"document_id": 20, "source": "PRO 02 - Liderazgo Rev 07.docx", "codigo": "PRO-02",
+     "titulo_doc": "Liderazgo", "revision": "07", "fecha_revision": "12/11/2020",
+     "clausula": None, "titulo": "Descripción del Proceso > Revisión por la Dirección",
+     "pagina": None, "tipo": "contenido", "score": 0.02},
+    {"document_id": 20, "source": "PRO 02 - Liderazgo Rev 07.docx", "codigo": "PRO-02",
+     "titulo_doc": "Liderazgo", "revision": "07", "fecha_revision": "12/11/2020",
+     "clausula": None, "titulo": "Historial de Cambios", "pagina": None,
+     "tipo": "historial", "score": 0.01},
+    {"document_id": 20, "source": "PRO 02 - Liderazgo Rev 07.docx", "codigo": "PRO-02",
+     "titulo_doc": "Liderazgo", "revision": "07", "fecha_revision": "12/11/2020",
+     "clausula": None, "titulo": "Registros", "pagina": None,
+     "tipo": "tabla", "score": 0.01},
 ]
+for _chunk in CHUNKS:
+    _chunk.setdefault("content", "texto")
+
 REF_1 = "[Manual_Prueba_RAG.pdf, cláusula 3.3, pág. 3]"
 REF_2 = "[Manual_Prueba_RAG.pdf, cláusula 1.3, pág. 1]"
+
+
+class OriginTests(unittest.TestCase):
+    def test_contexto_indica_norma_o_documento_interno(self):
+        for chunk in CHUNKS:
+            chunk.setdefault("content", "texto")
+        context = _format_context(CHUNKS)
+        self.assertIn("[F1] (Documento interno | Manual_Prueba_RAG.pdf", context)
+        self.assertIn("[F4] (Norma ISO 9001:2015 | NOM_ISO_9001-2015.pdf", context)
+
+    def test_contexto_de_procedimiento_con_encabezado(self):
+        context = _format_context(CHUNKS)
+        self.assertIn(
+            "[F5] (Documento interno | PRO-02 Liderazgo Rev. 07 del 12/11/2020 | "
+            "Descripción del Proceso > Revisión por la Dirección)",
+            context,
+        )
+        self.assertIn("Historial de Cambios | HISTORIAL DE CAMBIOS (antecedente, no vigente))", context)
+        self.assertIn("Registros | TABLA)", context)
+
+    def test_referencia_de_procedimiento_sin_pagina(self):
+        result = build_answer("Una vez al año [F5]. Cambió [F6].", CHUNKS)
+        self.assertEqual(
+            result["answer"],
+            "Una vez al año [PRO-02 Rev. 07, sección Revisión por la Dirección]. "
+            "Cambió [PRO-02 Rev. 07, sección Historial de Cambios].",
+        )
+        self.assertEqual([s["tipo"] for s in result["sources"]], ["contenido", "historial"])
+        self.assertEqual(
+            [s["referencia"] for s in result["sources"]],
+            ["PRO-02 Rev. 07, sección Revisión por la Dirección",
+             "PRO-02 Rev. 07, sección Historial de Cambios"],
+        )
+
+    def test_sources_incluye_norma(self):
+        result = build_answer("Interno [F1]. Norma [F4].", CHUNKS)
+        self.assertEqual([s["norma"] for s in result["sources"]], [None, "ISO 9001:2015"])
 
 
 class CitationTests(unittest.TestCase):
@@ -30,6 +84,7 @@ class CitationTests(unittest.TestCase):
         self.assertEqual(result["answer"], f"Se realizan cada cuatro meses {REF_1}.")
         self.assertTrue(result["verificada"])
         self.assertEqual([s["clausula"] for s in result["sources"]], ["3.3"])
+        self.assertEqual(f"[{result['sources'][0]['referencia']}]", REF_1)
 
     def test_sources_solo_incluye_citados_en_orden(self):
         result = build_answer("Uno [F2]. Dos [F1]. Otra vez [F2].", CHUNKS)
@@ -84,7 +139,7 @@ class CitationTests(unittest.TestCase):
         self.assertTrue(result["answer"].startswith("Se realizan cada cuatro meses."))
 
     def test_solo_citas_invalidas_agrega_advertencia(self):
-        result = build_answer("Dato [F7] [documento, pág. 2].", CHUNKS)
+        result = build_answer("Dato [F17] [documento, pág. 2].", CHUNKS)
         self.assertFalse(result["verificada"])
         self.assertEqual(result["answer"], f"Dato.\n\n{WARNING}")
 

@@ -15,12 +15,13 @@ def show(question: str) -> None:
     if result["sources"]:
         print("\nFragmentos usados:")
         for s in result["sources"]:
-            ref = s["source"]
-            if s.get("clausula"):
-                ref += f" · {s['clausula']} {s.get('titulo') or ''}"
-            if s.get("pagina"):
-                ref += f" · pág. {s['pagina']}"
-            print(f"  - {ref}")
+            # Misma referencia que en las citas de la respuesta.
+            line = f"  - {s['referencia']}"
+            if not s["referencia"].startswith(s["source"]):
+                line += f" (archivo: {s['source']})"
+            if s.get("tipo") == "historial":
+                line += " · historial de cambios"
+            print(line)
     print()
 
 
