@@ -31,7 +31,7 @@ con fragmentos de esa norma, y "el documento interno establece" con
 fragmentos internos. Nunca presentes lo que dice un documento interno
 como requisito de una norma, ni al revés.
 Después de cada afirmación importante escribí la marca del fragmento
-que la respalda, por ejemplo: "Se revisa una vez al año [F2]."
+que la respalda, por ejemplo: "Dato tomado del fragmento dos [F2]."
 Citá ÚNICAMENTE con esas marcas. No escribas nombres de documentos,
 cláusulas ni páginas como cita: se agregan automáticamente.
 Los fragmentos marcados HISTORIAL DE CAMBIOS describen versiones
