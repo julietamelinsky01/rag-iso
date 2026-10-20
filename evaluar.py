@@ -108,7 +108,14 @@ CASOS = [
 ]
 
 # En ninguna respuesta pueden quedar marcas internas sin reemplazar.
-SIEMPRE_PROHIBIDO = [r"\[\s*F\s*\d+", r"\b(documento|fragmento)\s+F\d+\b"]
+SIEMPRE_PROHIBIDO = [
+    r"\[\s*F\s*\d+",
+    r"\b(documento|fragmento)\s+F\d+\b",
+    # Texto del ejemplo del prompt copiado en la respuesta.
+    r"dato tomado",
+    r"(primera|segunda) afirmaci[oó]n",
+    r"\bfragmento (uno|dos|tres|cuatro|cinco|seis|siete|ocho|\d+)\b",
+]
 
 
 def plain(text: str) -> str:
