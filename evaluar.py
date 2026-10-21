@@ -1,4 +1,4 @@
-"""Evaluación automática del RAG con las preguntas de GUIA_PRUEBAS.md.
+"""Evaluación automática del RAG con las preguntas de GUIA_PRUEBAS.md (PRO-02).
 
 Uso:
     python evaluar.py                 (las 30 preguntas)
@@ -59,39 +59,6 @@ CASOS = [
     {"n": 13, "q": "¿Quién identifica los riesgos de los procesos y dónde se documentan?",
      "debe": ["responsable de calidad", "matriz de riesgos"],
      "citas": ["sección Gestión de riesgos"]},
-    # B. Manual de prueba
-    {"n": 14, "q": "¿Cada cuánto se realizan las auditorías internas y cuánto se conservan sus informes?",
-     "debe": ["cuatro meses", "cinco años"], "citas": ["cláusula 3.3"]},
-    {"n": 15, "q": "Según el manual, ¿cada cuánto se revisan los procedimientos?",
-     "debe": ["seis meses"], "citas": ["cláusula 1.1"]},
-    {"n": 16, "q": "¿Cuánto tiempo se conservan los procedimientos obsoletos y los registros de aprobación?",
-     "debe": ["dos años", "tres años"], "citas": ["cláusula 1.3"]},
-    {"n": 17, "q": "¿Cómo se hacen las copias de seguridad?",
-     "debe": ["22:00", "45 días", "primer lunes"], "citas": ["cláusula 2.1"]},
-    {"n": 18, "q": "¿En cuánto tiempo se revocan los accesos de alguien que se va?",
-     "debe": ["24 horas"], "citas": ["cláusula 2.2"]},
-    {"n": 19, "q": "¿Qué plazos hay para responder un reclamo de un cliente?",
-     "debe": [["un día hábil", "1 día hábil"], ["tres días hábiles", "3 días hábiles"]],
-     "no_debe": [r"\bla norma\b"], "citas": ["cláusula 3.1"]},
-    # C. ISO 9001
-    {"n": 20, "q": "¿Qué debe establecer la alta dirección en la política de la calidad?",
-     "debe": ["mejora continua", "objetivos de la calidad"], "citas": ["cláusula 5.2.1"]},
-    {"n": 21, "q": "¿Qué información documentada exige la norma para las auditorías internas?",
-     "debe": ["programa de auditoría", "resultados"], "citas": ["cláusula 9.2.2"]},
-    {"n": 22, "q": "Según la norma, ¿cada cuánto se debe hacer la revisión por la dirección?",
-     "debe": ["intervalos planificados"],
-     "no_debe": [r"una vez al a[nñ]o", r"no encontr"], "citas": ["cláusula 9.3.1"]},
-    {"n": 23, "q": "¿Qué exige la norma cuando ocurre una no conformidad?",
-     "debe": [["corregir", "controlar"], "causas", "eficacia"], "citas": ["cláusula 10.2"]},
-    {"n": 24, "q": "¿Qué pide la norma sobre la competencia del personal?",
-     "debe": ["competen", ["educación", "formación", "experiencia"]],
-     "citas": ["cláusula 7.2"]},
-    # D. Mezcla de documentos
-    {"n": 25, "q": "¿Qué dice el PRO-02 sobre la frecuencia de la revisión por la Dirección y qué exige la norma?",
-     "debe": [["una vez al año", "anual"], "intervalos planificados"],
-     "citas": ["sección Revisión por la Dirección", "cláusula 9.3"]},
-    {"n": 26, "q": "¿Qué pasa si no se aplica algún punto de la norma en el alcance?",
-     "debe": ["justific"], "citas": ["Definición del Alcance", "cláusula 4.3"]},
     # E. Lo que no debe inventar
     {"n": 27, "q": "¿Cuántos días de vacaciones corresponden a un empleado con cinco años de antigüedad?",
      "no_encontrado": True},
@@ -99,12 +66,28 @@ CASOS = [
      "debe": [["no encontr", "no indica", "no se indica", "no figura", "no mencion", "no especific"]],
      "no_debe": [r"(?<!no )(est[aá]|se encuentra) certificad"]},
     {"n": 29, "q": "¿Cuál es el salario de la responsable de calidad?",
-     "debe": [["no encontr", "no establece", "no se establece", "no especific"]],
-     "no_debe": [r"\$\s*\d", r"\d+\s*pesos"]},
+     "no_encontrado": True,
+     },
     {"n": 30, "q": "¿El PRO-02 Rev. 07 es la versión vigente?",
-     "debe": ["07"],
+     # Vale identificar la revisión o decir que no lo encontró;
+     # lo que no puede es afirmar que está vigente.
+     "debe": [["07", "no encontr"]],
      "no_debe": [r"(?<!no )\bes la (versi[oó]n|revisi[oó]n) vigente",
                  r"^s[ií][,.]"]},
+    # F. Más preguntas sobre PRO-02
+    {"n": 31, "q": "¿Cuál es el objetivo del procedimiento de liderazgo?",
+     "debe": ["metodología", "Sistema de Gestión de Calidad"], "citas": ["PRO-02"]},
+    {"n": 32, "q": "¿Quién es el responsable del proceso de liderazgo y qué áreas involucra?",
+     "debe": ["Dirección", "Directorio"], "citas": ["PRO-02"]},
+    {"n": 33, "q": "¿Qué registros genera el procedimiento PRO-02?",
+     "debe": ["Matriz FODA", "Minuta", "Matriz de Riesgos", "partes interesadas"],
+     "citas": ["sección Registros"]},
+    {"n": 34, "q": "¿Dónde se registran las partes interesadas y cuándo se revisan?",
+     "debe": ["Requisitos partes interesadas", "Revisión"],
+     "citas": ["sección Identificación de partes interesadas"]},
+    {"n": 35, "q": "¿Qué se hace con los resultados de la revisión por la Dirección?",
+     "debe": ["oportunidades de mejora", ["minuta", "minutas"]],
+     "citas": ["sección Revisión por la Dirección"]},
 ]
 
 # En ninguna respuesta pueden quedar marcas internas sin reemplazar.

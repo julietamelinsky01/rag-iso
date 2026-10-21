@@ -27,7 +27,7 @@ EMBEDDING_DIM = 768
 
 # Subir este número cuando cambie la forma de leer o fragmentar:
 # sync_drive.py vuelve a procesar los archivos hechos con otra versión.
-PIPELINE_VERSION = 2
+PIPELINE_VERSION = 3
 
 
 def read_file(path: Path) -> tuple[DocMeta, list[Chunk]]:
@@ -70,6 +70,10 @@ def header_card(meta: DocMeta) -> Chunk | None:
         lines.append(f"Realizado por: {meta.realizado}")
     if meta.aprobado:
         lines.append(f"Aprobado por: {meta.aprobado}")
+    # Sin esta línea, el modelo deducía que la revisión cargada es la vigente.
+    lines.append(
+        "Vigencia: el documento no indica si esta revisión es la vigente."
+    )
     return Chunk("\n".join(lines), None, "Ficha del documento", None, "contenido")
 
 
