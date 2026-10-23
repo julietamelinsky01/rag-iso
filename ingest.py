@@ -27,7 +27,7 @@ EMBEDDING_DIM = 768
 
 # Subir este número cuando cambie la forma de leer o fragmentar:
 # sync_drive.py vuelve a procesar los archivos hechos con otra versión.
-PIPELINE_VERSION = 3
+PIPELINE_VERSION = 4
 
 
 def read_file(path: Path) -> tuple[DocMeta, list[Chunk]]:

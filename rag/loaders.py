@@ -230,10 +230,13 @@ def _table_to_text(table) -> str:
             header = headers[j] if j < len(headers) else ""
             pairs.append(f"{header}: {text}" if header else text)
         if pairs:
-            lines.append("; ".join(pairs))
+            # Un dato por renglón: el modelo relaciona mejor cada columna
+            # con la pregunta que en una fila larga separada por ";".
+            lines.append("\n".join([pairs[0]] + [f"  - {p}" for p in pairs[1:]]))
     if not lines:  # tabla sin datos de texto: se dejan los títulos
         lines.append(" | ".join(h for h in headers if h))
-    return "\n".join(lines)
+    # Una línea en blanco separa las filas.
+    return "\n\n".join(lines)
 
 
 _HEADER_LABELS = re.compile(

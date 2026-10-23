@@ -98,7 +98,7 @@ class DocxTests(unittest.TestCase):
     def test_tabla_fila_por_fila_con_columnas(self):
         chunk = self.find("Matriz FODA")
         self.assertIn(
-            "Identificación: Matriz FODA; Soporte: Electrónico; Tiempo: Permanente",
+            "Identificación: Matriz FODA\n - Soporte: Electrónico\n - Tiempo: Permanente",
             chunk.content,
         )
         self.assertEqual(chunk.titulo, "Registros")

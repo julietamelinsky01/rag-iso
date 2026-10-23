@@ -34,6 +34,8 @@ TOC_MIN_LINES = 5
 TOC_MIN_RATIO = 0.4
 
 MAX_CHARS = 1800
+# Las tablas admiten algo más, para no separar filas de un mismo registro.
+MAX_TABLE_CHARS = 2600
 OVERLAP = 200
 SMALL_TABLE = 400  # caracteres: hasta acá la tabla queda con su sección
 
@@ -150,16 +152,18 @@ def _clean(text: str) -> str:
 
 
 def _split(text: str, by_lines: bool = False) -> list[str]:
-    if len(text) <= MAX_CHARS:
+    if len(text) <= (MAX_TABLE_CHARS if by_lines else MAX_CHARS):
         return [text]
     if by_lines:  # tablas: agrupar filas completas, sin cortarlas
+        # Las filas van separadas por una línea en blanco.
+        separator = "\n\n" if "\n\n" in text else "\n"
         parts, current = [], ""
-        for line in text.splitlines():
-            if current and len(current) + len(line) + 1 > MAX_CHARS:
+        for row in text.split(separator):
+            if current and len(current) + len(row) + len(separator) > MAX_TABLE_CHARS:
                 parts.append(current)
-                current = line
+                current = row
             else:
-                current = f"{current}\n{line}" if current else line
+                current = f"{current}{separator}{row}" if current else row
         if current:
             parts.append(current)
         return parts
