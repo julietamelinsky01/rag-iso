@@ -11,7 +11,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ingest import PIPELINE_VERSION  # noqa: E402
-from sync_drive import classify, decide, detect_norma, eligible  # noqa: E402
+from sync_drive import (  # noqa: E402
+    FOLDER_MIME, classify, decide, detect_norma, display_name, eligible,
+    not_supported,
+    select_documents, snapshot,
+)
 
 
 def drive_file(**changes):
@@ -156,6 +160,116 @@ class EligibleTests(unittest.TestCase):
                 )
             )
         )
+
+
+class FakeRequest:
+    def __init__(self, result):
+        self.result = result
+
+    def execute(self, num_retries=0):
+        return self.result
+
+
+class FakeFiles:
+    """Árbol: raíz/{a.pdf, sub/{b.pdf, otra/c.pdf}}; sub2 se apunta a sub."""
+    TREE = {
+        "root": [drive_file(id="A", name="a.pdf"),
+                 {"id": "sub", "name": "sub", "mimeType": FOLDER_MIME}],
+        "sub": [drive_file(id="B", name="b.pdf", md5Checksum="b"),
+                {"id": "otra", "name": "otra", "mimeType": FOLDER_MIME},
+                {"id": "root", "name": "ciclo", "mimeType": FOLDER_MIME}],
+        "otra": [drive_file(id="C", name="c.pdf", md5Checksum="c")],
+    }
+
+    def get(self, fileId, fields, supportsAllDrives):
+        return FakeRequest({"id": fileId, "name": "Raíz", "mimeType": FOLDER_MIME})
+
+    def list(self, q, **kwargs):
+        return FakeRequest({"files": self.TREE[q.split("'")[1]]})
+
+
+class FakeDrive:
+    def files(self):
+        return FakeFiles()
+
+
+class SubcarpetasTests(unittest.TestCase):
+    def test_documentos_externos_por_carpeta(self):
+        for path in ("01/Documentacion Externa/Ley.pdf", "03/Externas/2019/Inf.docx",
+                     "Documentación externa/Ley.pdf"):
+            file = drive_file(name=path.split("/")[-1], path=path)
+            self.assertEqual(detect_norma(file), "Documento externo")
+
+    def test_norma_en_carpeta_externa_sigue_siendo_norma(self):
+        file = drive_file(name="ISO 9001-2015.PDF", path="01/Documentacion Externa/ISO 9001-2015.PDF")
+        self.assertEqual(detect_norma(file), "ISO 9001:2015")
+
+    def test_interno_no_se_confunde_con_externo(self):
+        file = drive_file(name="Plan.docx", path="03- Auditorias/Internas/Plan.docx")
+        self.assertIsNone(detect_norma(file))
+        file = drive_file(name="Plan externo.docx", path="Plan externo.docx")
+        self.assertIsNone(detect_norma(file))
+
+    def test_descripcion_corrige_el_externo(self):
+        file = drive_file(name="Ley.pdf", path="Externas/Ley.pdf", description="norma: interno")
+        self.assertIsNone(detect_norma(file))
+
+    def test_nombre_con_anio_de_la_carpeta(self):
+        file = drive_file(name="foda.docx", path="02- Liderazgo/2024/foda.docx")
+        self.assertEqual(display_name(file), "foda.docx (2024)")
+
+    def test_nombre_sin_carpeta_de_anio(self):
+        for path in ("foda.docx", "03- Auditorias/foda.docx", "Rev 2024/foda.docx"):
+            file = drive_file(name="foda.docx", path=path)
+            self.assertEqual(display_name(file), "foda.docx")
+
+    def test_versiones_de_distintos_anios_se_citan_distinto(self):
+        one = drive_file(id="1", name="f.docx", path="2023/f.docx", md5Checksum="x")
+        two = drive_file(id="2", name="f.docx", path="2024/f.docx", md5Checksum="y")
+        _, apply, _ = decide({"1": one, "2": two}, {"1": one, "2": two}, {})
+        self.assertEqual([i["name"] for i in apply], ["f.docx (2023)", "f.docx (2024)"])
+
+    def test_mover_de_carpeta_de_anio_actualiza_solo_metadatos(self):
+        file = drive_file(name="f.docx", path="2024/f.docx")
+        self.assertEqual(classify(file, state(file_name="f.docx")), "metadatos")
+
+    def test_recorre_subcarpetas_con_ruta(self):
+        name, files = snapshot(FakeDrive(), "root")
+        self.assertEqual(name, "Raíz")
+        self.assertEqual(
+            [f["path"] for f in files],
+            ["a.pdf", "sub/b.pdf", "sub/otra/c.pdf"],
+        )
+
+    def test_temporales_de_word_no_se_procesan_ni_se_informan(self):
+        temp = drive_file(name="~$triz Foda.docx", path="x/~$triz Foda.docx")
+        self.assertFalse(eligible(temp))
+        self.assertEqual(not_supported([temp]), [])
+
+    def test_otros_formatos_se_informan(self):
+        excel = drive_file(name="Minuta.xls", path="x/Minuta.xls")
+        self.assertEqual(not_supported([excel]), [excel])
+
+    def test_copia_identica_conserva_la_ya_sincronizada(self):
+        root = drive_file(id="R", path="manual.pdf")
+        nested = drive_file(id="N", path="sub/manual.pdf")
+        selected, copies = select_documents([nested, root], {"N": state()})
+        self.assertEqual(list(selected), ["N"])
+        self.assertEqual(copies[0][0]["id"], "R")
+
+    def test_copia_identica_sin_estado_conserva_la_mas_cercana(self):
+        root = drive_file(id="R", path="manual.pdf")
+        nested = drive_file(id="N", path="sub/manual.pdf")
+        selected, copies = select_documents([nested, root], {})
+        self.assertEqual(list(selected), ["R"])
+        self.assertEqual(copies[0][0]["id"], "N")
+
+    def test_mismo_nombre_con_contenido_distinto_se_conservan(self):
+        one = drive_file(id="1", path="2023/foda.docx", md5Checksum="x")
+        two = drive_file(id="2", path="2024/foda.docx", md5Checksum="y")
+        selected, copies = select_documents([one, two], {})
+        self.assertEqual(sorted(selected), ["1", "2"])
+        self.assertEqual(copies, [])
 
 
 class DecideTests(unittest.TestCase):

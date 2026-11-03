@@ -11,3 +11,4 @@ EMBEDDING_MODEL = "embeddinggemma:latest"
 EMBEDDING_DIM = 768
 CHAT_MODEL = "qwen3:4b-instruct-2507-q4_K_M"
 TOP_K = 6
+EXTERNAL_DOCUMENT = "Documento externo"  # valor de documents.norma

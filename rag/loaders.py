@@ -63,6 +63,8 @@ def load_document(path: str) -> tuple[DocMeta, list[Block]]:
 # DOCX
 # ---------------------------------------------------------------
 
+MAX_HEADER_CHARS = 120  # más que esto no es un título de columna
+MAX_UPPER_HEADER_CHARS = 40
 PSEUDO_HEADING_LEVEL = 9  # títulos "a mano": debajo de los de estilo
 
 # Word viejo mete palabras dentro de "smart tags", hipervínculos o campos
@@ -202,6 +204,10 @@ def _table_to_text(table) -> str:
                 lines.append(key or value)
         return "\n".join(lines)
 
+    # Formulario de pares "dato: valor": no tiene títulos de columna.
+    if _is_form(rows):
+        return _table_without_headers(rows)
+
     # Filas de títulos al principio (pueden ser 2 por celdas combinadas).
     n_header = 0
     for row in rows[:3]:
@@ -210,7 +216,11 @@ def _table_to_text(table) -> str:
             n_header += 1
         else:
             break
-    n_header = n_header or 1  # sin formato de título: la primera fila
+    if not n_header:
+        # Sin formato de título: la primera fila solo si parece de títulos.
+        if not _looks_like_titles(rows[0]):
+            return _table_without_headers(rows)
+        n_header = 1
 
     headers = [""] * ncols
     for row in rows[:n_header]:
@@ -219,16 +229,44 @@ def _table_to_text(table) -> str:
             if text and text not in headers[j].split(" - "):
                 headers[j] = f"{headers[j]} - {text}" if headers[j] else text
 
-    lines = []
+    # Títulos larguísimos son en realidad datos: no sirven como columna.
+    if any(len(header) > MAX_HEADER_CHARS for header in headers):
+        return _table_without_headers(rows)
+
+    lines, previous = [], None
+
+    # Una sola celda que ocupa toda la fila es el título de la tabla,
+    # no el nombre de una columna.
+    distinct = set(filter(None, headers))
+    if len(distinct) == 1 and ncols > 1 and n_header == 1:
+        lines.append(distinct.pop())
+        headers = [""] * ncols
+
     for row in rows[n_header:]:
+        cells = _unique_cells(row)
+        texts = [_cell_text(cell) for cell, _ in cells]
+
+        # Las celdas combinadas verticalmente repiten la fila entera.
+        if texts == previous:
+            continue
+        previous = texts
+
+        # Fila de títulos a mitad de la tabla: rige para las filas siguientes.
+        if _is_header_row(texts, cells):
+            headers = texts + [""] * (ncols - len(texts))
+            # También queda como texto: puede no tener datos debajo.
+            lines.append(" | ".join(dict.fromkeys(t for t in texts if t)))
+            continue
+
         pairs, last = [], None
-        for j, (cell, repeated) in enumerate(_unique_cells(row)):
-            text = _cell_text(cell)
+        for j, (cell, repeated) in enumerate(cells):
+            text = texts[j]
             if not text or repeated or text == last:
                 continue
             last = text
             header = headers[j] if j < len(headers) else ""
-            pairs.append(f"{header}: {text}" if header else text)
+            # Si la celda repite su título, es el nombre del grupo.
+            pairs.append(f"{header}: {text}" if header and header != text else text)
         if pairs:
             # Un dato por renglón: el modelo relaciona mejor cada columna
             # con la pregunta que en una fila larga separada por ";".
@@ -236,6 +274,69 @@ def _table_to_text(table) -> str:
     if not lines:  # tabla sin datos de texto: se dejan los títulos
         lines.append(" | ".join(h for h in headers if h))
     # Una línea en blanco separa las filas.
+    return "\n\n".join(lines)
+
+
+def _is_header_row(texts: list[str], cells: list) -> bool:
+    """Fila de títulos: varias celdas distintas, en negrita o en mayúsculas."""
+    filled = list(dict.fromkeys(text for text in texts if text))
+    if len(filled) < 2:
+        return False
+    if all(_is_header_cell(cell) for cell, _ in cells):
+        return True
+    return all(
+        text.isupper() and len(text) <= MAX_UPPER_HEADER_CHARS for text in filled
+    )
+
+
+def _filled_cells(row) -> list:
+    """Celdas con texto de la fila, sin las repetidas por combinación."""
+    return [
+        cell for cell, repeated in _unique_cells(row)
+        if not repeated and _cell_text(cell)
+    ]
+
+
+def _is_form(rows) -> bool:
+    """Pares "dato: valor": dato en negrita, valor normal, datos sin repetir."""
+    pairs = labels = 0
+    seen = set()
+    for row in rows:
+        cells = _filled_cells(row)
+        if len(cells) < 2:
+            continue
+        labels += 1
+        if (len(cells) == 2 and _is_header_cell(cells[0])
+                and not _is_header_cell(cells[1])
+                and _cell_text(cells[0]) not in seen):
+            pairs += 1
+        seen.add(_cell_text(cells[0]))
+    return pairs >= 3 and pairs * 2 >= labels
+
+
+def _looks_like_titles(row) -> bool:
+    """Varias celdas cortas, sin números: pueden ser títulos sin formato."""
+    texts = [_cell_text(cell) for cell in _filled_cells(row)]
+    return len(set(texts)) >= 2 and all(
+        len(text) <= MAX_UPPER_HEADER_CHARS and not any(c.isdigit() for c in text)
+        for text in texts
+    )
+
+
+def _table_without_headers(rows) -> str:
+    """Tabla sin títulos reales: cada fila con sus celdas, sin inventar columnas."""
+    lines, previous = [], None
+    for row in rows:
+        texts = [_cell_text(cell) for cell in _filled_cells(row)]
+        if not texts or texts == previous:
+            continue
+        previous = texts
+        if len(texts) == 2 and len(texts[0]) <= MAX_HEADER_CHARS:
+            lines.append(f"{texts[0]}: {texts[1]}")
+        elif all(len(text) <= MAX_UPPER_HEADER_CHARS for text in texts[1:]):
+            lines.append(" | ".join(texts))
+        else:
+            lines.append("\n".join([texts[0]] + [f"  - {t}" for t in texts[1:]]))
     return "\n\n".join(lines)
 
 
@@ -294,12 +395,15 @@ def _docx_meta(doc, path: str) -> DocMeta:
 # PDF / TXT / MD
 # ---------------------------------------------------------------
 
+_PDF_UNICODE_RE = re.compile(r"/uni([0-9A-Fa-f]{4})")
+MIN_PDF_LETTER_RATIO = 0.5  # los PDF legibles reales están en 0,68 o más
+
 def _load_pdf(path: str) -> list[Block]:
     from pypdf import PdfReader
 
     blocks = []
     for number, page in enumerate(PdfReader(path).pages, start=1):
-        text = page.extract_text() or ""
+        text = _decode_pdf_text(page.extract_text() or "")
         if text.strip():
             blocks.append(Block("text", text, page=number))
     if not blocks:
@@ -307,7 +411,24 @@ def _load_pdf(path: str) -> list[Block]:
             "El PDF no tiene texto extraíble (¿es escaneado?). Hace falta OCR, "
             "por ejemplo con Docling."
         )
+    _check_pdf_text(blocks)
     return blocks
+
+
+def _decode_pdf_text(text: str) -> str:
+    """Algunos PDF entregan cada letra como código: /uni004C → L."""
+    return _PDF_UNICODE_RE.sub(lambda m: chr(int(m.group(1), 16)), text)
+
+
+def _check_pdf_text(blocks: list[Block]) -> None:
+    """Rechaza el PDF si el texto extraído no parece legible."""
+    text = "".join(block.text for block in blocks)
+    letters = sum(character.isalpha() for character in text)
+    if letters < MIN_PDF_LETTER_RATIO * len(text):
+        raise ValueError(
+            "El texto extraído del PDF no parece legible. "
+            "Revisá el archivo o si necesita OCR."
+        )
 
 
 def _load_text(path: str) -> list[Block]:

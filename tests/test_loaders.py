@@ -5,6 +5,7 @@ Crean un Word de ejemplo con la estructura de un procedimiento real
 Ejecutar desde la raíz del proyecto:
     python -m unittest discover -s tests -v
 """
+import re
 import sys
 import tempfile
 import unittest
@@ -16,7 +17,9 @@ from docx import Document  # noqa: E402
 
 from rag.chunker import Block, chunk_blocks  # noqa: E402
 from ingest import read_file  # noqa: E402
-from rag.loaders import load_document  # noqa: E402
+from rag.loaders import (  # noqa: E402
+    _check_pdf_text, _decode_pdf_text, load_document,
+)
 
 
 def bold(document, text):
@@ -117,7 +120,132 @@ class DocxTests(unittest.TestCase):
         self.assertTrue(all(c.pagina is None for c in self.chunks))
 
 
+class TablasConVariosTitulosTests(unittest.TestCase):
+    def read(self, rows):
+        document = Document()
+        table = document.add_table(rows=len(rows), cols=len(rows[0]))
+        for i, row in enumerate(rows):
+            for j, value in enumerate(row):
+                table.cell(i, j).text = value
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "tabla.docx"
+            document.save(path)
+            _, blocks = load_document(str(path))
+        return blocks[0].text
+
+    def test_titulos_a_mitad_de_tabla_rigen_para_lo_que_sigue(self):
+        text = self.read([
+            ["INTERNO", "DEBILIDADES", "FORTALEZAS"],
+            ["INTERNO", "Poca innovación", "Trayectoria"],
+            ["EXTERNO", "AMENAZAS", "OPORTUNIDADES"],
+            ["EXTERNO", "Competencia", "Mercado nuevo"],
+        ])
+        self.assertIn("DEBILIDADES: Poca innovación", text)
+        self.assertIn("AMENAZAS: Competencia", text)
+        self.assertIn("OPORTUNIDADES: Mercado nuevo", text)
+        self.assertNotIn("DEBILIDADES: Competencia", text)
+
+    def test_titulo_de_tabla_no_se_usa_como_columna(self):
+        document = Document()
+        table = document.add_table(rows=3, cols=2)
+        table.cell(0, 0).merge(table.cell(0, 1)).text = "RESUMEN DE AUDITORÍA"
+        table.cell(1, 0).text, table.cell(1, 1).text = "EMPRESA", "PROCESO"
+        table.cell(2, 0).text, table.cell(2, 1).text = "AR", "Ventas"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "t.docx"
+            document.save(path)
+            _, blocks = load_document(str(path))
+        self.assertIn("RESUMEN DE AUDITORÍA", blocks[0].text)
+        self.assertNotIn("RESUMEN DE AUDITORÍA: ", blocks[0].text)
+
+    def test_formulario_de_datos_y_valores(self):
+        text = self.read_three_columns_form()
+        self.assertIn("Dirección: Crisol 31", text)
+        self.assertIn("Sitios: 1", text)
+        self.assertNotIn("Nombre: Dirección", text)
+
+    def read_three_columns_form(self):
+        document = Document()
+        table = document.add_table(rows=4, cols=3)
+        for i, (label, value) in enumerate((
+            ("Nombre", "AR"), ("Dirección", "Crisol 31"),
+            ("Sitios", "1"), ("Código", "PQC 33"),
+        )):
+            table.cell(i, 0).paragraphs[0].add_run(label).bold = True
+            table.cell(i, 1).merge(table.cell(i, 2)).text = value
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "f.docx"
+            document.save(path)
+            _, blocks = load_document(str(path))
+        return blocks[0].text
+
+    def test_filas_sin_titulos_no_inventan_columnas(self):
+        text = self.read([
+            ["Alto", "Todos los procesos de gestión están integrados en un sistema", ""],
+            ["Medio", "Parte de los procesos de gestión están integrados en el sistema", ""],
+            ["No Aplica", "Los sistemas no están integrados entre sí en la organización", "X"],
+        ])
+        self.assertNotIn("Alto: Medio", text)
+        self.assertIn("Medio", text)
+        self.assertIn("Parte de los procesos", text)
+
+    def test_conserva_valores_iguales_en_una_fila(self):
+        text = self.read([
+            ["N° de no conformidades de la auditoría", "Mayor", "0", "Menor", "0"],
+            ["N° de no conformidades cerradas", "Mayor", "0", "Menor", "0"],
+        ])
+        self.assertIn("Mayor | 0 | Menor | 0", text)
+
+    def test_filas_repetidas_quedan_una_sola_vez(self):
+        text = self.read([
+            ["Registro", "Lugar", "Tiempo"],
+            ["Minuta", "Servidor", "Permanente"],
+            ["Minuta", "Servidor", "Permanente"],
+            ["Matriz", "Papel", "Un año"],
+        ])
+        self.assertEqual(text.count("Minuta"), 1)
+
+    def test_datos_en_mayusculas_de_una_sola_celda_no_son_titulos(self):
+        text = self.read([
+            ["Sigla", "Nombre", "Área"],
+            ["SGC", "", ""],
+            ["BVC", "Certificadora", "Externa"],
+        ])
+        self.assertIn("Nombre: Certificadora", text)
+
+
 class PdfTests(unittest.TestCase):
+    def test_documento_sin_clausulas_conserva_cada_pagina(self):
+        pages = [Block("text", f"Texto de la página {n}. " * 60, page=n) for n in (1, 2, 3)]
+        chunks = chunk_blocks(pages)
+        self.assertEqual(chunks[0].pagina, 1)
+        for chunk in chunks:
+            first = re.search(r"página (\d)", chunk.content).group(1)
+            self.assertEqual(chunk.pagina, int(first))
+        self.assertEqual(chunks[-1].pagina, 3)
+
+    def test_clausula_que_sigue_en_otra_pagina_empieza_en_la_suya(self):
+        chunks = chunk_blocks([
+            Block("text", "4.1 Alcance\nTexto corto del alcance.", page=7),
+            Block("text", "Sigue el alcance en la otra hoja.", page=8),
+        ])
+        self.assertEqual([(c.clausula, c.pagina) for c in chunks], [("4.1", 7)])
+
+    def test_texto_con_codigos_se_decodifica(self):
+        self.assertEqual(
+            _decode_pdf_text("/uni004C/uni0045/uni0059/uni0020/uni00ED 1"), "LEY í 1"
+        )
+
+    def test_texto_normal_no_cambia(self):
+        self.assertEqual(_decode_pdf_text("Ley 11.723"), "Ley 11.723")
+
+    def test_pdf_ilegible_se_rechaza(self):
+        with self.assertRaises(ValueError):
+            _check_pdf_text([Block("text", "004C 0045 0059 / 0031 0031 / 0037 " * 5, page=1)])
+
+    def test_pdf_legible_se_acepta(self):
+        _check_pdf_text([Block("text", "Artículo 1. Las obras científicas.", page=1)])
+
     def test_clausulas_con_pagina(self):
         chunks = chunk_blocks([
             Block("text", "3.3 Auditorías internas\nSe realizan cada cuatro meses.", page=3),

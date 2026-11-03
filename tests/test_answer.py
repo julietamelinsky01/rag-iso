@@ -42,6 +42,10 @@ REF_2 = "[Manual_Prueba_RAG.pdf, cláusula 1.3, pág. 1]"
 
 
 class OriginTests(unittest.TestCase):
+    def test_documento_externo_no_se_presenta_como_norma(self):
+        chunk = {"source": "Ley.pdf", "norma": "Documento externo", "content": "x"}
+        self.assertIn("[F1] (Documento externo | Ley.pdf", _format_context([chunk]))
+
     def test_contexto_indica_norma_o_documento_interno(self):
         for chunk in CHUNKS:
             chunk.setdefault("content", "texto")

@@ -14,9 +14,13 @@ Tipo de documento (norma o documento interno):
   "norma: ISO 9001:2015", se usa ese valor; "norma: interno" lo marca
   como documento interno.
 - Si no, se reconoce por el nombre: NOM_ISO_9001-2015.pdf → ISO 9001:2015.
+- Si está dentro de una carpeta "Externas" o "Documentacion Externa", es
+  un documento externo.
 - Si tampoco, es un documento interno.
 
-Procesa PDF, DOCX, TXT y MD ubicados directamente en la carpeta.
+Procesa PDF, DOCX, TXT y MD de la carpeta y de todas sus subcarpetas.
+Omite los temporales de Word (~$...) y las copias idénticas de un mismo
+archivo; los demás formatos se informan como no compatibles.
 Si cambia la versión del lector (PIPELINE_VERSION en ingest.py), los
 archivos procesados con otra versión se vuelven a procesar.
 
@@ -38,9 +42,15 @@ BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 
 from ingest import EXTS, PIPELINE_VERSION, prepare_file
+from rag import config
 from rag.clients import supabase
 
 FIELDS = "id,name,mimeType,modifiedTime,version,md5Checksum,description"
+FOLDER_MIME = "application/vnd.google-apps.folder"
+YEAR_FOLDER_RE = re.compile(r"(?:19|20)\d{2}")
+EXTERNAL_FOLDER_RE = re.compile(
+    r"(?:documentaci[oó]n\s+)?extern[ao]s?", re.IGNORECASE
+)
 STAGE_BATCH = 100  # fragmentos por petición (~1 MB)
 
 
@@ -48,21 +58,9 @@ STAGE_BATCH = 100  # fragmentos por petición (~1 MB)
 # Lectura de Drive
 # ---------------------------------------------------------------
 
-def snapshot(drive, folder_id: str) -> tuple[str, list[dict]]:
-    """Lista la carpeta completa o falla: nunca devuelve un listado parcial."""
-    folder = drive.files().get(
-        fileId=folder_id,
-        fields="id,name,mimeType,trashed",
-        supportsAllDrives=True,
-    ).execute(num_retries=3)
-
-    if (
-        folder.get("trashed")
-        or folder["mimeType"] != "application/vnd.google-apps.folder"
-    ):
-        raise RuntimeError("La carpeta no está disponible. No se aplicó nada.")
-
-    files, token = [], None
+def list_children(drive, folder_id: str) -> list[dict]:
+    """Contenido directo de una carpeta, completo o con error."""
+    items, token = [], None
     while True:
         result = drive.files().list(
             q=f"'{folder_id}' in parents and trashed = false",
@@ -78,22 +76,94 @@ def snapshot(drive, folder_id: str) -> tuple[str, list[dict]]:
                 "Drive devolvió un listado incompleto. No se aplicó nada."
             )
 
-        files.extend(result.get("files", []))
+        items.extend(result.get("files", []))
         token = result.get("nextPageToken")
         if not token:
-            return folder["name"], files
+            return items
+
+
+def snapshot(drive, folder_id: str) -> tuple[str, list[dict]]:
+    """Lista la carpeta y sus subcarpetas, o falla: nunca un listado parcial.
+
+    Cada archivo lleva en "path" su ubicación relativa a la carpeta.
+    """
+    folder = drive.files().get(
+        fileId=folder_id,
+        fields="id,name,mimeType,trashed",
+        supportsAllDrives=True,
+    ).execute(num_retries=3)
+
+    if folder.get("trashed") or folder["mimeType"] != FOLDER_MIME:
+        raise RuntimeError("La carpeta no está disponible. No se aplicó nada.")
+
+    files, pending, seen = [], [(folder_id, "")], {folder_id}
+    while pending:
+        current, prefix = pending.pop(0)
+        for item in list_children(drive, current):
+            path = f"{prefix}{item['name']}"
+            if item["mimeType"] == FOLDER_MIME:
+                if item["id"] not in seen:
+                    seen.add(item["id"])
+                    pending.append((item["id"], f"{path}/"))
+            else:
+                files.append({**item, "path": path})
+    return folder["name"], files
 
 
 def eligible(file: dict) -> bool:
     return (
         not file["mimeType"].startswith("application/vnd.google-apps.")
         and Path(file["name"]).suffix.lower() in EXTS
+        and not file["name"].startswith("~$")  # temporales de Word
     )
+
+
+def select_documents(
+    files: list[dict], previous: dict[str, dict]
+) -> tuple[dict[str, dict], list[tuple[dict, dict]]]:
+    """Archivos a procesar y copias idénticas omitidas (copia, original).
+
+    De las copias con la misma huella queda una sola: la ya sincronizada
+    o, si no hay, la más cercana a la carpeta principal.
+    """
+    def priority(file: dict) -> tuple:
+        path = file.get("path", file["name"])
+        return (file["id"] not in previous, path.count("/"), path)
+
+    selected, duplicates, by_md5 = {}, [], {}
+    for file in sorted(filter(eligible, files), key=priority):
+        md5 = file.get("md5Checksum")
+        if md5 and md5 in by_md5:
+            duplicates.append((file, by_md5[md5]))
+            continue
+        if md5:
+            by_md5[md5] = file
+        selected[file["id"]] = file
+    return selected, duplicates
+
+
+def not_supported(files: list[dict]) -> list[dict]:
+    """Archivos que no se pueden leer, sin contar los temporales de Word."""
+    return [
+        file for file in files
+        if not eligible(file) and not file["name"].startswith("~$")
+    ]
+
+
+def display_name(file: dict) -> str:
+    """Nombre para citar: agrega el año si el archivo está en una carpeta de año.
+
+    Distingue versiones con igual nombre: "Matriz Foda Rev 09.docx (2024)".
+    """
+    parts = file.get("path", file["name"]).split("/")
+    if len(parts) > 1 and YEAR_FOLDER_RE.fullmatch(parts[-2]):
+        return f"{file['name']} ({parts[-2]})"
+    return file["name"]
 
 
 def signature(file: dict) -> tuple:
     return (
-        file["name"],
+        display_name(file),
         file.get("modifiedTime"),
         file.get("version"),
         file.get("md5Checksum"),
@@ -114,10 +184,10 @@ INTERNAL_VALUES = {"", "interno", "interna", "documento interno", "ninguna", "no
 
 
 def detect_norma(file: dict) -> str | None:
-    """Norma del documento, o None si es un documento interno.
+    """Norma, documento externo o None si es un documento interno.
 
-    La descripción del archivo en Drive tiene prioridad sobre el nombre,
-    para poder corregir a mano cualquier caso.
+    La descripción del archivo en Drive tiene prioridad sobre el nombre y
+    la carpeta, para poder corregir a mano cualquier caso.
     """
     match = NORMA_LINE_RE.search(file.get("description") or "")
     if match:
@@ -126,6 +196,9 @@ def detect_norma(file: dict) -> str | None:
 
     match = ISO_NAME_RE.match(Path(file["name"]).stem)
     if not match:
+        folders = file.get("path", file["name"]).split("/")[:-1]
+        if any(EXTERNAL_FOLDER_RE.fullmatch(folder.strip()) for folder in folders):
+            return config.EXTERNAL_DOCUMENT
         return None
     iec, number, year = match.groups()
     norma = f"ISO/IEC {number}" if iec else f"ISO {number}"
@@ -133,6 +206,8 @@ def detect_norma(file: dict) -> str | None:
 
 
 def describe(norma: str | None) -> str:
+    if norma == config.EXTERNAL_DOCUMENT:
+        return "documento externo"
     return f"norma {norma}" if norma else "documento interno"
 
 
@@ -179,7 +254,7 @@ def classify(file: dict, previous: dict | None) -> str:
     if not previous.get("active", True):
         return "reactivar"
     if (
-        previous["file_name"] != file["name"]
+        previous["file_name"] != display_name(file)
         or previous["modified_time"] != file["modifiedTime"]
         or previous.get("drive_version") != file.get("version")
         or previous.get("norma") != detect_norma(file)
@@ -217,7 +292,7 @@ def decide(
             apply.append(
                 {
                     "id": file_id,
-                    "name": file["name"],
+                    "name": display_name(file),
                     "md5": file["md5Checksum"],
                     "modifiedTime": file["modifiedTime"],
                     "version": file.get("version"),
@@ -361,15 +436,15 @@ def main() -> int:
     previous = load_state(db, folder_id)
 
     folder_name, files = snapshot(drive, folder_id)
-    first = {f["id"]: f for f in files if eligible(f)}
+    first, duplicates = select_documents(files, previous)
 
     print(f"Carpeta: {folder_name} | Compatibles: {len(first)}", flush=True)
 
     plan = {}
-    for file in sorted(first.values(), key=lambda f: f["name"].lower()):
+    for file in sorted(first.values(), key=lambda f: f["path"].lower()):
         plan[file["id"]] = classify(file, previous.get(file["id"]))
         print(
-            f"  {plan[file['id']]}: {file['name']} "
+            f"  {plan[file['id']]}: {file['path']} "
             f"({describe(detect_norma(file))})",
             flush=True,
         )
@@ -381,6 +456,15 @@ def main() -> int:
     for row in sorted(removed, key=lambda r: r["file_name"].lower()):
         print(f"  se desactivará: {row['file_name']}", flush=True)
 
+    for copy, original in duplicates:
+        print(
+            f"  copia omitida: {copy['path']} (igual a {original['path']})",
+            flush=True,
+        )
+
+    for file in sorted(not_supported(files), key=lambda f: f["path"].lower()):
+        print(f"  no compatible: {file['path']}", flush=True)
+
     if args.dry_run:
         print("Simulación terminada. No se descargó ni modificó nada.")
         return 0
@@ -391,7 +475,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="rag-drive-") as work:
         for file_id, action in plan.items():
             file = first[file_id]
-            name = file["name"]
+            name = display_name(file)
 
             if action == "sin huella":
                 failed[file_id] = "Drive no informó la huella MD5."
@@ -406,7 +490,7 @@ def main() -> int:
                     continue
 
                 # Nombre local fijo: no depende del nombre remoto.
-                path = Path(work) / f"{file_id}{Path(name).suffix.lower()}"
+                path = Path(work) / f"{file_id}{Path(file['name']).suffix.lower()}"
                 print(f"⬇ Descargando: {name}", flush=True)
                 download(drive, file, path)
                 doc_meta, rows = prepare_file(path, label=name)
@@ -421,7 +505,7 @@ def main() -> int:
 
     # Segunda lectura: Drive no ofrece una foto transaccional.
     _, final_files = snapshot(drive, folder_id)
-    final = {f["id"]: f for f in final_files if eligible(f)}
+    final, _ = select_documents(final_files, previous)
 
     present, apply, deferred = decide(first, final, failed)
 

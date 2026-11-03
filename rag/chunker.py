@@ -15,6 +15,7 @@
 """
 import re
 from dataclasses import dataclass
+from itertools import groupby
 
 from rag.loaders import Block
 
@@ -53,8 +54,7 @@ def chunk_blocks(blocks: list[Block]) -> list[Chunk]:
     chunks: list[Chunk] = []
     path: list[tuple[int, str]] = []  # pila de (nivel, título)
     clausula: str | None = None
-    buffer: list[str] = []
-    buffer_page: int | None = None
+    buffer: list[tuple[str, int | None]] = []  # (renglón, página)
     buffer_kinds: set[str] = set()
 
     def ruta() -> str | None:
@@ -66,15 +66,19 @@ def chunk_blocks(blocks: list[Block]) -> list[Chunk]:
         return kind
 
     def flush() -> None:
-        nonlocal buffer, buffer_page, buffer_kinds
-        text = _clean("\n".join(buffer))
+        nonlocal buffer, buffer_kinds
+        text, page_starts = _join_pages(buffer)
         if text:
             kind = "tabla" if buffer_kinds == {"table"} else "contenido"
+            cursor = 0
             for piece in _split(text):
+                position = max(text.find(piece, cursor), cursor)
                 chunks.append(
-                    Chunk(piece, clausula, ruta(), buffer_page, tipo(kind))
+                    Chunk(piece, clausula, ruta(),
+                          _page_at(page_starts, position), tipo(kind))
                 )
-        buffer, buffer_page, buffer_kinds = [], None, set()
+                cursor = position + 1
+        buffer, buffer_kinds = [], set()
 
     def push_heading(level: int, title: str) -> None:
         while path and path[-1][0] >= level:
@@ -90,10 +94,8 @@ def chunk_blocks(blocks: list[Block]) -> list[Chunk]:
             )
         elif block.kind == "table":
             if len(block.text) <= SMALL_TABLE:
-                buffer.append(block.text)
+                buffer.append((block.text, block.page))
                 buffer_kinds.add("table")
-                if buffer_page is None:
-                    buffer_page = block.page
                 continue
             flush()
             for piece in _split(block.text, by_lines=True):
@@ -113,13 +115,38 @@ def chunk_blocks(blocks: list[Block]) -> list[Chunk]:
                         10 + clausula.count("."),
                         f"{clausula} {match.group(2).strip()}",
                     )
-                if buffer_page is None:
-                    buffer_page = block.page
-                buffer.append(line)
+                buffer.append((line, block.page))
                 if line.strip():
                     buffer_kinds.add("text")
     flush()
     return chunks
+
+
+def _join_pages(
+    lines: list[tuple[str, int | None]]
+) -> tuple[str, list[tuple[int, int | None]]]:
+    """Une los renglones y registra en qué posición empieza cada página."""
+    text, page_starts = "", []
+    for page, group in groupby(lines, key=lambda line: line[1]):
+        segment = _clean("\n".join(line for line, _ in group))
+        if segment:
+            if text:
+                text += "\n"
+            page_starts.append((len(text), page))
+            text += segment
+    return text, page_starts
+
+
+def _page_at(
+    page_starts: list[tuple[int, int | None]], position: int
+) -> int | None:
+    """Página en la que empieza el texto de esa posición."""
+    current = page_starts[0][1]
+    for start, page in page_starts:
+        if start > position:
+            break
+        current = page
+    return current
 
 
 def _is_toc_page(block: Block) -> bool:

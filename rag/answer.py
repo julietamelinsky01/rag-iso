@@ -100,6 +100,8 @@ def _reference(chunk: dict) -> str:
 
 def _origin(chunk: dict) -> str:
     norma = chunk.get("norma")
+    if norma == config.EXTERNAL_DOCUMENT:
+        return norma
     return f"Norma {norma}" if norma else "Documento interno"
 
 
