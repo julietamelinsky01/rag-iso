@@ -50,6 +50,7 @@ Si los fragmentos no permiten responder, respondé exactamente:
 Distinguí requisitos documentados de sugerencias y no afirmes certificaciones.
 """
 
+NORM_MENTION_RE = re.compile(r"\b(?:norma|iso)\b", re.IGNORECASE)
 YEAR_RE = re.compile(r"\b((?:19|20)\d{2})\b")
 # Año de carpeta en el nombre del documento: "Matriz Foda.docx (2024)".
 SOURCE_YEAR_RE = re.compile(r"\(((?:19|20)\d{2})\)$")
@@ -102,14 +103,37 @@ def _filter_by_year(question: str, chunks: list[dict]) -> list[dict]:
     ]
 
 
+def _is_norm(chunk: dict) -> bool:
+    return bool(chunk.get("norma")) and chunk["norma"] != config.EXTERNAL_DOCUMENT
+
+
+def _reserve_other_documents(
+    question: str, chunks: list[dict], k: int
+) -> list[dict]:
+    """Los mejores de cualquier documento, más lugares para otros documentos.
+
+    Así, si una pregunta nombra un documento y también la norma, el modelo
+    recibe fragmentos de los dos. Si la pregunta menciona una norma, esos
+    lugares van primero a las normas. Sin candidatos de otros documentos,
+    se completa con los siguientes más relevantes.
+    """
+    head = chunks[:max(k - config.OTHER_DOCUMENT_SLOTS, 1)]
+    seen = {chunk.get("document_id") for chunk in head}
+    rest = chunks[len(head):]
+    others = [c for c in rest if c.get("document_id") not in seen]
+    same = [c for c in rest if c.get("document_id") in seen]
+    if NORM_MENTION_RE.search(question):
+        others.sort(key=lambda c: not _is_norm(c))  # conserva el orden interno
+    return head + (others + same)[:k - len(head)]
+
+
 def retrieve(question: str, k: int = config.TOP_K) -> list[dict]:
     vector = embed([question], query=True)[0]
-    # Con un año en la pregunta se piden más, porque algunos se descartan.
-    count = k * 3 if YEAR_RE.search(question) else k
     result = supabase().rpc("hybrid_search", {
-        "query_text": question, "query_embedding": vector, "match_count": count,
+        "query_text": question, "query_embedding": vector, "match_count": k * 3,
     }).execute()
-    return _filter_by_year(question, result.data or [])[:k]
+    chunks = _filter_by_year(question, result.data or [])
+    return _reserve_other_documents(question, chunks, k)
 
 
 def _document(chunk: dict) -> str:

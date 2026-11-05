@@ -42,6 +42,31 @@ REF_1 = "[Manual_Prueba_RAG.pdf, cláusula 3.3, pág. 3]"
 REF_2 = "[Manual_Prueba_RAG.pdf, cláusula 1.3, pág. 1]"
 
 
+class ReservedSlotsTests(unittest.TestCase):
+    CHUNKS = [{"document_id": 1, "id": i} for i in range(6)] + [
+        {"document_id": 2, "id": 10},
+        {"document_id": 3, "id": 20, "norma": "ISO 9001:2015"},
+        {"document_id": 4, "id": 30, "norma": "Documento externo"},
+    ]
+
+    def ids(self, question):
+        return [c["id"] for c in answer_module._reserve_other_documents(question, self.CHUNKS, 6)]
+
+    def test_reserva_lugares_para_otros_documentos(self):
+        self.assertEqual(self.ids("¿Cómo se archiva?"), [0, 1, 2, 3, 10, 20])
+
+    def test_si_menciona_la_norma_prioriza_normas(self):
+        self.assertEqual(self.ids("¿Qué exige la norma?"), [0, 1, 2, 3, 20, 10])
+
+    def test_documento_externo_no_cuenta_como_norma(self):
+        self.assertEqual(self.ids("¿Qué exige la ISO?")[4], 20)
+
+    def test_sin_otros_documentos_completa_con_los_siguientes(self):
+        chunks = [{"document_id": 1, "id": i} for i in range(8)]
+        result = answer_module._reserve_other_documents("x", chunks, 6)
+        self.assertEqual([c["id"] for c in result], [0, 1, 2, 3, 4, 5])
+
+
 class YearFilterTests(unittest.TestCase):
     CHUNKS = [
         {"source": "Foda.docx (2022)"}, {"source": "Foda.docx (2024)"},
