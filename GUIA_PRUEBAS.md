@@ -1,15 +1,14 @@
-# Guía de prueba del RAG — PRO-02
+# Guía de prueba del RAG
 
-Preguntas para comprobar cómo responde el sistema con el documento real cargado:
-**PRO 02 - Liderazgo Rev 07** (procedimiento de AR Consultores, Word).
+Preguntas para comprobar cómo responde el sistema con los 17 documentos reales cargados: procedimientos PRO-01, PRO-02 y PRO-03, Matrices FODA, ISO 9001, leyes e informes de auditoría.
 
-El manual de prueba y la ISO 9001 se desactivaron. Cuando se carguen otros procedimientos o normas, se agregan sus preguntas acá y en `evaluar.py`.
+Excel y `.doc` todavía no se leen. Las preguntas completas, con lo que se exige en cada una, están en `evaluar.py`.
 
 Las respuestas esperadas salen del texto del documento. El modelo puede redactar distinto: lo que importa es **el dato** y **la cita**.
 
 ## Cómo probar
 
-**Automático** (las 22 preguntas, unos 3 minutos):
+**Automático** (37 preguntas, unos 7 minutos):
 
 ```bash
 python evaluar.py
@@ -72,8 +71,31 @@ En Word no hay páginas: la cita es `[PRO-02 Rev. 07, sección ...]`.
 
 ---
 
+## Preguntas agregadas al cargar más documentos
+
+| # | Pregunta | Respuesta esperada |
+|---|---|---|
+| 36 | Según el PRO-03, ¿cada cuánto deben revisarse los elementos del Sistema? | Al menos una vez al año |
+| 37 | ¿Qué diferencia hay entre una No Conformidad y una Observación? | No Conformidad: sin cumplimiento. Observación: cumplimiento parcial |
+| 38 | ¿Quién puede modificar los documentos del SGC? | El Responsable de Calidad |
+| 39 | ¿Cuánto tiempo guardo las minutas? | Permanente |
+| 40 | ¿Qué oportunidades tiene la FODA 2024? | Solo datos de 2024 |
+| 41 | ¿Cuáles eran las amenazas en la Matriz FODA 2022? | Incluye el DNU presidencial |
+| 42 | ¿Cuántas no conformidades hubo en la auditoría de recertificación 2023? | 0 mayores y 0 menores |
+| 43 | Según la Ley 11.723, ¿cuándo termina un contrato de edición? | Al agotarse las ediciones (Art. 44) |
+| 44 | ¿Cuál es el objeto de la ley de protección de datos personales? | Protección integral de los datos personales (Art. 1) |
+| 45 | ¿Cuál es el objeto de la Ley 25.326? | Igual que la 44 |
+| 46 | ¿Cada cuánto se hacen las auditorías según el PRO-03 y qué exige la norma? | Al menos una vez al año; intervalos planificados |
+| 47 | Según la norma, ¿cada cuánto se debe hacer la revisión por la dirección? | A intervalos planificados (9.3.1) |
+| 48 | ¿Qué dice el PRO-02 sobre la frecuencia de la revisión por la Dirección y qué exige la norma? | Al menos una vez al año; intervalos planificados |
+| 49 | ¿Qué resultado tuvo la auditoría externa de 2025? | "No encontré" |
+| 50 | ¿Cuántos riesgos tiene la Matriz de Riesgos? | "No encontré" (está en Excel) |
+
+La 28 ahora exige no afirmar que la certificación está vigente: puede informar lo que dicen los informes.
+
+---
+
 ## Última medición
 
-20/10/2026, automática, después de agregar la línea de vigencia: **20/22**.
-- La 30 ya no afirma que la Rev. 07 sea la vigente (responde "No encontré").
-- Fallan la 6 y la 35: respuestas correctas pero incompletas.
+05/11/2026, automática: **33/37**.
+Fallaron: 11 (historial de PRO-02), 39 (minutas), 45 (Ley 25.326 por número) y 48 (PRO-02 y la norma).

@@ -50,6 +50,8 @@ Si los fragmentos no permiten responder, respondé exactamente:
 Distinguí requisitos documentados de sugerencias y no afirmes certificaciones.
 """
 
+# Código de documento en una pregunta: "PRO-02", "pro 02", "RPG-3".
+CODE_RE = re.compile(r"\b([A-Za-z]{2,5})[\s-]?(\d{1,4})\b")
 NORM_MENTION_RE = re.compile(r"\b(?:norma|iso)\b", re.IGNORECASE)
 YEAR_RE = re.compile(r"\b((?:19|20)\d{2})\b")
 # Año de carpeta en el nombre del documento: "Matriz Foda.docx (2024)".
@@ -103,6 +105,35 @@ def _filter_by_year(question: str, chunks: list[dict]) -> list[dict]:
     ]
 
 
+def _normalized_codes(text: str) -> set[tuple[str, int]]:
+    return {
+        (letters.upper(), int(number))
+        for letters, number in CODE_RE.findall(text or "")
+    }
+
+
+def _filter_by_code(question: str, chunks: list[dict]) -> list[dict]:
+    """Si la pregunta nombra un documento por su código, usa solo ese documento.
+
+    Si además menciona una norma, conserva también las normas. Si ningún
+    fragmento tiene ese código (por ejemplo, "ISO 9001"), no filtra.
+    """
+    codes = _normalized_codes(question)
+    if not codes:
+        return chunks
+
+    def named(chunk: dict) -> bool:
+        return bool(_normalized_codes(chunk.get("codigo")) & codes)
+
+    if not any(named(chunk) for chunk in chunks):
+        return chunks
+    keep_norms = bool(NORM_MENTION_RE.search(question))
+    return [
+        chunk for chunk in chunks
+        if named(chunk) or (keep_norms and _is_norm(chunk))
+    ]
+
+
 def _is_norm(chunk: dict) -> bool:
     return bool(chunk.get("norma")) and chunk["norma"] != config.EXTERNAL_DOCUMENT
 
@@ -130,9 +161,12 @@ def _reserve_other_documents(
 def retrieve(question: str, k: int = config.TOP_K) -> list[dict]:
     vector = embed([question], query=True)[0]
     result = supabase().rpc("hybrid_search", {
-        "query_text": question, "query_embedding": vector, "match_count": k * 3,
+        "query_text": question, "query_embedding": vector,
+        # Con un código en la pregunta se descartan muchos: se piden más.
+        "match_count": k * (6 if CODE_RE.search(question) else 3),
     }).execute()
     chunks = _filter_by_year(question, result.data or [])
+    chunks = _filter_by_code(question, chunks)
     return _reserve_other_documents(question, chunks, k)
 
 

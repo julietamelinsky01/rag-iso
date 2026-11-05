@@ -1,7 +1,7 @@
-"""Evaluación automática del RAG con las preguntas de GUIA_PRUEBAS.md (PRO-02).
+"""Evaluación automática del RAG con las preguntas de GUIA_PRUEBAS.md.
 
 Uso:
-    python evaluar.py                 (las 30 preguntas)
+    python evaluar.py                 (todas las preguntas)
     python evaluar.py --solo 6,11,22  (algunas)
     python evaluar.py --veces 2       (cada pregunta dos veces)
     python evaluar.py --detalle       (muestra cada respuesta completa)
@@ -33,7 +33,7 @@ CASOS = [
     {"n": 2, "q": "¿Con qué frecuencia se hacen las reuniones de revisión por la Dirección?",
      "debe": [["una vez al año", "anual"]], "no_debe": [r"semestral"],
      "citas": ["sección Revisión por la Dirección"]},
-    {"n": 3, "q": "¿Qué temas se tratan en la revisión por la Dirección?",
+    {"n": 3, "q": "Según el PRO-02, ¿qué temas se tratan en la revisión por la Dirección?",
      "debe": ["suficiencia de recursos", "oportunidades de mejora", "proveedores externos"],
      "citas": ["sección Revisión por la Dirección"]},
     {"n": 4, "q": "¿Dónde se archiva la Matriz FODA y por cuánto tiempo?",
@@ -43,15 +43,15 @@ CASOS = [
     {"n": 6, "q": "¿Cómo se mide la satisfacción de los clientes?",
      "debe": ["encuesta", ["1 a 10", "1 al 10", "del 1 al 10"]],
      "no_debe": [r"una vez al a[nñ]o"], "citas": ["sección Satisfacción de clientes"]},
-    {"n": 7, "q": "¿Qué pasa si un cliente pone un puntaje de 5?",
+    {"n": 7, "q": "En la encuesta de satisfacción del PRO-02, ¿qué pasa si un cliente pone un puntaje de 5?",
      "debe": ["correctiva"], "citas": ["sección Satisfacción de clientes"]},
-    {"n": 8, "q": "¿Y con un puntaje de 7?",
+    {"n": 8, "q": "En la encuesta de satisfacción del PRO-02, ¿qué significa un puntaje de 7?",
      "debe": ["monitorear"], "citas": ["sección Satisfacción de clientes"]},
     {"n": 9, "q": "¿Quién aprobó el procedimiento PRO-02 y qué revisión es?",
      "debe": ["direccion", "07", "12/11/2020"], "citas": ["Ficha del documento"]},
     {"n": 10, "q": "¿Qué cambió en la revisión 07 del PRO-02?",
      "debe": ["semestral"], "citas": ["Historial de Cambios"]},
-    {"n": 11, "q": "¿Quién elaboró la versión 04 y qué se modificó?",
+    {"n": 11, "q": "¿Quién elaboró la versión 04 del PRO-02 y qué se modificó?",
      "debe": ["Adrián Ferrari", "satisfacción"], "no_debe": [r"5\.3", r"OBS 2"],
      "citas": ["Historial de Cambios"]},
     {"n": 12, "q": "¿Cómo se comunican los cambios que pueden afectar al SGC?",
@@ -62,9 +62,10 @@ CASOS = [
     # E. Lo que no debe inventar
     {"n": 27, "q": "¿Cuántos días de vacaciones corresponden a un empleado con cinco años de antigüedad?",
      "no_encontrado": True},
+    # Vale informar lo que dicen los informes; no afirmar que sigue vigente.
     {"n": 28, "q": "¿AR Consultores está certificada en ISO 9001?",
-     "debe": [["no encontr", "no indica", "no se indica", "no figura", "no mencion", "no especific"]],
-     "no_debe": [r"(?<!no )(est[aá]|se encuentra) certificad"]},
+     "debe": [["informe", "auditor", "no encontr", "no indica"]],
+     "no_debe": [r"(?<!no )(?<!no est[aá] )\bvigente"]},
     {"n": 29, "q": "¿Cuál es el salario de la responsable de calidad?",
      "no_encontrado": True,
      },
@@ -85,9 +86,44 @@ CASOS = [
     {"n": 34, "q": "¿Dónde se registran las partes interesadas y cuándo se revisan?",
      "debe": ["Requisitos partes interesadas", "Revisión"],
      "citas": ["sección Identificación de partes interesadas"]},
-    {"n": 35, "q": "¿Qué se hace con los resultados de la revisión por la Dirección?",
+    {"n": 35, "q": "Según el PRO-02, ¿qué se hace con los resultados de la revisión por la Dirección?",
      "debe": ["oportunidades de mejora", ["minuta", "minutas"]],
      "citas": ["sección Revisión por la Dirección"]},
+    # G. Otros documentos reales
+    {"n": 36, "q": "Según el PRO-03, ¿cada cuánto deben revisarse los elementos del Sistema?",
+     "debe": ["una vez al año"], "citas": ["PRO-03"]},
+    {"n": 37, "q": "¿Qué diferencia hay entre una No Conformidad y una Observación?",
+     "debe": ["parcial"], "citas": ["PRO-03"]},
+    {"n": 38, "q": "¿Quién puede modificar los documentos del SGC?",
+     "debe": ["responsable de calidad"], "citas": ["PRO-01"]},
+    {"n": 39, "q": "¿Cuánto tiempo guardo las minutas?",
+     "debe": ["permanente"], "citas": ["sección Registros"]},
+    # H. Versiones por año
+    {"n": 40, "q": "¿Qué oportunidades tiene la FODA 2024?",
+     "debe": ["ampliación del mercado"], "no_debe": [r"destinar tiempo"], "citas": ["(2024)"]},
+    {"n": 41, "q": "¿Cuáles eran las amenazas en la Matriz FODA 2022?",
+     "debe": ["DNU"], "citas": ["(2022)"]},
+    {"n": 42, "q": "¿Cuántas no conformidades hubo en la auditoría de recertificación 2023?",
+     "debe": [["0", "ninguna", "no hubo"]], "citas": ["(2023)"]},
+    # I. Leyes
+    {"n": 43, "q": "Según la Ley 11.723, ¿cuándo termina un contrato de edición?",
+     "debe": ["agot"], "citas": ["Art. 44"]},
+    {"n": 44, "q": "¿Cuál es el objeto de la ley de protección de datos personales?",
+     "debe": ["protección integral"], "citas": ["Art. 1"]},
+    {"n": 45, "q": "¿Cuál es el objeto de la Ley 25.326?",
+     "debe": ["protección integral"], "no_debe": [r"registro de infractores"], "citas": ["Art. 1"]},
+    # J. Cruce de documentos
+    {"n": 46, "q": "¿Cada cuánto se hacen las auditorías según el PRO-03 y qué exige la norma?",
+     "debe": ["una vez al año", "intervalos planificados"], "citas": ["PRO-03", "cláusula 9.2"]},
+    {"n": 47, "q": "Según la norma, ¿cada cuánto se debe hacer la revisión por la dirección?",
+     "debe": ["intervalos planificados"], "no_debe": [r"una vez al a[nñ]o", r"no encontr"],
+     "citas": ["cláusula 9.3.1"]},
+    {"n": 48, "q": "¿Qué dice el PRO-02 sobre la frecuencia de la revisión por la Dirección y qué exige la norma?",
+     "debe": [["una vez al año", "anual"], "intervalos planificados"],
+     "citas": ["sección Revisión por la Dirección", "cláusula 9.3"]},
+    # K. Lo que todavía no está cargado o no existe
+    {"n": 49, "q": "¿Qué resultado tuvo la auditoría externa de 2025?", "no_encontrado": True},
+    {"n": 50, "q": "¿Cuántos riesgos tiene la Matriz de Riesgos?", "no_encontrado": True},
 ]
 
 # En ninguna respuesta pueden quedar marcas internas sin reemplazar.

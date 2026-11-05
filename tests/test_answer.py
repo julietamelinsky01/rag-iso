@@ -67,6 +67,32 @@ class ReservedSlotsTests(unittest.TestCase):
         self.assertEqual([c["id"] for c in result], [0, 1, 2, 3, 4, 5])
 
 
+class CodeFilterTests(unittest.TestCase):
+    CHUNKS = [
+        {"codigo": "PRO-02", "id": 1}, {"codigo": "PRO-03", "id": 2},
+        {"source": "Foda.docx", "id": 3}, {"norma": "ISO 9001:2015", "id": 4},
+        {"norma": "Documento externo", "id": 5},
+    ]
+
+    def ids(self, question):
+        return [c["id"] for c in answer_module._filter_by_code(question, self.CHUNKS)]
+
+    def test_usa_solo_el_documento_nombrado(self):
+        self.assertEqual(self.ids("¿Quién elaboró la versión 04 del PRO-02?"), [1])
+
+    def test_acepta_variantes_del_codigo(self):
+        self.assertEqual(self.ids("en el pro 2 qué dice"), [1])
+
+    def test_si_menciona_la_norma_tambien_la_conserva(self):
+        self.assertEqual(self.ids("Qué dice el PRO-02 y qué exige la norma"), [1, 4])
+
+    def test_sin_codigo_no_filtra(self):
+        self.assertEqual(len(self.ids("¿Quién archiva las minutas?")), 5)
+
+    def test_codigo_sin_documento_no_filtra(self):
+        self.assertEqual(len(self.ids("¿Qué exige la ISO 9001?")), 5)
+
+
 class YearFilterTests(unittest.TestCase):
     CHUNKS = [
         {"source": "Foda.docx (2022)"}, {"source": "Foda.docx (2024)"},
