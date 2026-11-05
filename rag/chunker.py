@@ -22,6 +22,13 @@ from rag.loaders import Block
 CLAUSE_RE = re.compile(
     r"^\s*((?:[A-Z]\.)?\d{1,2}(?:\.\d{1,2}){0,4})\.?\s+([A-ZÁÉÍÓÚÑ][^\n]{2,120})$"
 )
+# Artículos de leyes: "ARTICULO 1° — (Objeto).", "Art. 44. — El contrato...".
+# Exige puntuación después del número, para no tomar citas como
+# "Art. 5 de la ley" que quedaron al comienzo de un renglón.
+ARTICLE_RE = re.compile(
+    r"^\s*(?:ART[IÍ]CULO|Art[ií]culo|Art\.)\s*(\d{1,3})(?:\s*(?:bis|ter))?\s*[°º]?"
+    r"\s*[.\-‐—–(]"
+)
 HISTORIAL_RE = re.compile(
     r"historial|control de cambios|registro de (?:cambios|revisiones)",
     re.IGNORECASE,
@@ -34,6 +41,7 @@ DOT_LEADER_RE = re.compile(r"(?:\.{4,}|…{2,})\s*\d{1,3}\s*$")
 TOC_MIN_LINES = 5
 TOC_MIN_RATIO = 0.4
 
+MAX_TOP_CLAUSE_WORDS = 6  # "10. Conclusiones" sí; "3. Los datos deben ser..." no
 MAX_CHARS = 1800
 # Las tablas admiten algo más, para no separar filas de un mismo registro.
 MAX_TABLE_CHARS = 2600
@@ -54,6 +62,7 @@ def chunk_blocks(blocks: list[Block]) -> list[Chunk]:
     chunks: list[Chunk] = []
     path: list[tuple[int, str]] = []  # pila de (nivel, título)
     clausula: str | None = None
+    has_articles = False
     buffer: list[tuple[str, int | None]] = []  # (renglón, página)
     buffer_kinds: set[str] = set()
 
@@ -89,9 +98,9 @@ def chunk_blocks(blocks: list[Block]) -> list[Chunk]:
         if block.kind == "heading":
             flush()
             push_heading(block.level, block.text)
-            clausula = _clause_of(block.text) or (
-                clausula if block.level > 1 else None
-            )
+            # Un título sin número cierra la cláusula anterior: si no, su
+            # número se arrastra a secciones que no le corresponden.
+            clausula = _clause_of(block.text)
         elif block.kind == "table":
             if len(block.text) <= SMALL_TABLE:
                 buffer.append((block.text, block.page))
@@ -107,8 +116,15 @@ def chunk_blocks(blocks: list[Block]) -> list[Chunk]:
                 continue
             # En PDF y texto, las cláusulas numeradas vienen dentro del texto.
             for line in block.text.splitlines():
+                article = ARTICLE_RE.match(line)
                 match = CLAUSE_RE.match(line)
-                if match and _looks_like_heading(match.group(2)):
+                if article:
+                    flush()
+                    has_articles = True
+                    clausula = f"Art. {article.group(1)}"
+                    push_heading(10, clausula)
+                elif (match and not has_articles
+                        and _looks_like_clause(match.group(1), match.group(2))):
                     flush()
                     clausula = match.group(1)
                     push_heading(
@@ -163,6 +179,13 @@ def _is_toc_page(block: Block) -> bool:
 def _clause_of(title: str) -> str | None:
     match = re.match(r"^\s*((?:[A-Z]\.)?\d{1,2}(?:\.\d{1,2}){0,4})\.?\s", title)
     return match.group(1) if match else None
+
+
+def _looks_like_clause(number: str, title: str) -> bool:
+    """Un número suelto ("3") con mucho texto es un ítem de lista, no una cláusula."""
+    if "." not in number and len(title.split()) > MAX_TOP_CLAUSE_WORDS:
+        return False
+    return _looks_like_heading(title)
 
 
 def _looks_like_heading(title: str) -> bool:

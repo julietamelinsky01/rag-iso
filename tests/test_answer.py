@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import rag.answer as answer_module  # noqa: E402
 from rag.answer import NOT_FOUND, WARNING, _format_context, build_answer  # noqa: E402
 
 CHUNKS = [
@@ -39,6 +40,57 @@ for _chunk in CHUNKS:
 
 REF_1 = "[Manual_Prueba_RAG.pdf, cláusula 3.3, pág. 3]"
 REF_2 = "[Manual_Prueba_RAG.pdf, cláusula 1.3, pág. 1]"
+
+
+class YearFilterTests(unittest.TestCase):
+    CHUNKS = [
+        {"source": "Foda.docx (2022)"}, {"source": "Foda.docx (2024)"},
+        {"source": "PRO 02.docx"}, {"source": "Foda.docx (2023)"},
+    ]
+
+    def sources(self, question):
+        return [c["source"] for c in answer_module._filter_by_year(question, self.CHUNKS)]
+
+    def test_descarta_otros_anios_y_conserva_sin_anio(self):
+        self.assertEqual(
+            self.sources("¿Qué oportunidades tiene la FODA 2024?"),
+            ["Foda.docx (2024)", "PRO 02.docx"],
+        )
+
+    def test_sin_anio_en_la_pregunta_no_filtra(self):
+        self.assertEqual(len(self.sources("¿Qué oportunidades tiene la FODA?")), 4)
+
+    def test_anio_sin_documentos_no_filtra(self):
+        self.assertEqual(len(self.sources("¿Qué exige la ISO 9001:2015?")), 4)
+
+    def test_compara_dos_anios(self):
+        self.assertEqual(
+            self.sources("Diferencias entre la FODA 2022 y 2024"),
+            ["Foda.docx (2022)", "Foda.docx (2024)", "PRO 02.docx"],
+        )
+
+
+class ArticleReferenceTests(unittest.TestCase):
+    def test_articulo_se_cita_como_articulo(self):
+        chunks = [{"source": "Ley.pdf", "clausula": "Art. 44", "pagina": 8, "content": "x"}]
+        result = build_answer("Termina al agotarse [F1].", chunks)
+        self.assertIn("[Ley.pdf, Art. 44, pág. 8]", result["answer"])
+
+
+class TemplateTests(unittest.TestCase):
+    def test_quita_el_ejemplo_y_conserva_las_citas(self):
+        result = build_answer(
+            "Se hace cada año.\nPrimera afirmación [F1]. Segunda afirmación [F2].",
+            CHUNKS,
+        )
+        self.assertNotIn("afirmación", result["answer"])
+        self.assertTrue(result["answer"].startswith("Se hace cada año."))
+        self.assertEqual(len(result["sources"]), 2)
+        self.assertTrue(result["verificada"])
+
+    def test_no_toca_la_palabra_afirmacion_en_otro_uso(self):
+        result = build_answer("Esa afirmación figura en el texto [F1].", CHUNKS)
+        self.assertIn("Esa afirmación figura", result["answer"])
 
 
 class OriginTests(unittest.TestCase):

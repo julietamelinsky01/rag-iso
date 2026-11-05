@@ -50,6 +50,14 @@ Si los fragmentos no permiten responder, respondé exactamente:
 Distinguí requisitos documentados de sugerencias y no afirmes certificaciones.
 """
 
+YEAR_RE = re.compile(r"\b((?:19|20)\d{2})\b")
+# Año de carpeta en el nombre del documento: "Matriz Foda.docx (2024)".
+SOURCE_YEAR_RE = re.compile(r"\(((?:19|20)\d{2})\)$")
+# Texto del ejemplo de formato del prompt, copiado en la respuesta.
+TEMPLATE_RE = re.compile(
+    r"\b(?:primera|segunda|tercera)\s+afirmaci[oó]n\b\.?\s*", re.IGNORECASE
+)
+BETWEEN_MARKS_RE = re.compile(r"\]\s*\.\s*\[")
 # Cualquier bloque entre corchetes de la respuesta del modelo.
 BRACKET_RE = re.compile(r"\[([^\[\]]*)\]")
 # Marcas de fragmento dentro de un bloque: F1, f 2, [F1, F3]...
@@ -62,12 +70,46 @@ HANDWRITTEN_RE = re.compile(
 )
 
 
+def _strip_template(text: str) -> str:
+    """Quita el texto del ejemplo de formato si el modelo lo copió.
+
+    Conserva las marcas: "Primera afirmación [F1]. Segunda afirmación [F2]."
+    queda como "[F1] [F2]."
+    """
+    text = TEMPLATE_RE.sub("", text)
+    return BETWEEN_MARKS_RE.sub("] [", text)
+
+
+def _filter_by_year(question: str, chunks: list[dict]) -> list[dict]:
+    """Si la pregunta nombra un año, descarta documentos de otros años.
+
+    Se conservan los documentos sin año. Si no hay ningún documento de
+    ese año (por ejemplo, "ISO 9001:2015"), no se filtra nada.
+    """
+    years = set(YEAR_RE.findall(question))
+    if not years:
+        return chunks
+
+    def document_year(chunk: dict) -> str | None:
+        match = SOURCE_YEAR_RE.search(chunk["source"])
+        return match.group(1) if match else None
+
+    if not any(document_year(chunk) in years for chunk in chunks):
+        return chunks
+    return [
+        chunk for chunk in chunks
+        if document_year(chunk) is None or document_year(chunk) in years
+    ]
+
+
 def retrieve(question: str, k: int = config.TOP_K) -> list[dict]:
     vector = embed([question], query=True)[0]
+    # Con un año en la pregunta se piden más, porque algunos se descartan.
+    count = k * 3 if YEAR_RE.search(question) else k
     result = supabase().rpc("hybrid_search", {
-        "query_text": question, "query_embedding": vector, "match_count": k,
+        "query_text": question, "query_embedding": vector, "match_count": count,
     }).execute()
-    return result.data or []
+    return _filter_by_year(question, result.data or [])[:k]
 
 
 def _document(chunk: dict) -> str:
@@ -90,7 +132,8 @@ def _reference(chunk: dict) -> str:
     """Referencia legible construida solo con metadatos guardados."""
     ref = _document(chunk)
     if chunk.get("clausula"):
-        ref += f", cláusula {chunk['clausula']}"
+        clause = chunk["clausula"]
+        ref += f", {clause}" if clause.startswith("Art.") else f", cláusula {clause}"
     elif _section(chunk):
         ref += f", sección {_section(chunk)}"
     if chunk.get("pagina"):
@@ -180,7 +223,7 @@ def apply_citations(
 
 def build_answer(text: str, chunks: list[dict]) -> dict:
     """Convierte la salida del modelo en la respuesta de la API."""
-    text, cited, discarded = apply_citations(text, chunks)
+    text, cited, discarded = apply_citations(_strip_template(text), chunks)
 
     if discarded:
         logger.warning("Se descartaron %d citas no verificables.", discarded)

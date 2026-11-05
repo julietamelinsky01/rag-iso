@@ -214,6 +214,53 @@ class TablasConVariosTitulosTests(unittest.TestCase):
         self.assertIn("Nombre: Certificadora", text)
 
 
+class ClausulasTests(unittest.TestCase):
+    def test_articulos_de_una_ley(self):
+        chunks = chunk_blocks([
+            Block("text", "ARTICULO 1° — (Objeto).\nProtección de los datos.", page=1),
+            Block("text", "2 No será necesario el consentimiento cuando:\nTexto.", page=2),
+            Block("text", "Art. 44. — El contrato terminará.\nSegún el Art. 5 de la ley.", page=8),
+        ])
+        self.assertEqual(
+            [(c.clausula, c.pagina) for c in chunks],
+            [("Art. 1", 1), ("Art. 44", 8)],
+        )
+        self.assertIn("2 No será necesario", chunks[0].content)
+
+    def test_cita_a_otro_articulo_no_abre_uno_nuevo(self):
+        chunks = chunk_blocks([
+            Block("text", "Art. 3. — Primero.\nArt. 5 de la presente ley se aplica.", page=1),
+        ])
+        self.assertEqual([c.clausula for c in chunks], ["Art. 3"])
+
+    def test_titulo_sin_numero_cierra_la_clausula(self):
+        chunks = chunk_blocks([
+            Block("heading", "10. Conclusiones", 9),
+            Block("text", "Se verificó la conformidad."),
+            Block("heading", "Modificaciones al sistema", 9),
+            Block("text", "Debe avisarse a la certificadora."),
+        ])
+        self.assertEqual([c.clausula for c in chunks], ["10", None])
+
+    def test_item_de_lista_no_es_clausula(self):
+        chunks = chunk_blocks([Block(
+            "text",
+            "ARTICULO 4 Calidad de los datos\n"
+            "1 Los datos personales que se recojan a los efectos de su tratamiento\n"
+            "texto de la ley",
+            page=1,
+        )])
+        self.assertTrue(all(c.clausula != "1" for c in chunks))
+
+    def test_clausulas_cortas_y_con_subnivel_siguen_valiendo(self):
+        chunks = chunk_blocks([Block(
+            "text", "10 Mejora\nTexto de mejora.\n"
+            "10.2.1 Cuando ocurra una no conformidad, incluida cualquiera originada por quejas, la organización\n"
+            "debe reaccionar.", page=1,
+        )])
+        self.assertEqual([c.clausula for c in chunks], ["10", "10.2.1"])
+
+
 class PdfTests(unittest.TestCase):
     def test_documento_sin_clausulas_conserva_cada_pagina(self):
         pages = [Block("text", f"Texto de la página {n}. " * 60, page=n) for n in (1, 2, 3)]
